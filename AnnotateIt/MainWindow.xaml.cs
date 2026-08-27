@@ -1,35 +1,33 @@
 ﻿using System;
+using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Ink;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Threading;
+using System.Windows.Media.Imaging;
 
 namespace AnnotateIt
 {
     /// <summary>
     /// Represents the primary transparent, borderless overlay window for Annotate It.
-    /// Acts as the root input-capturing surface above the Windows desktop.
+    /// Acts as the root ink-capturing surface above the Windows desktop.
     /// </summary>
     public partial class MainWindow : Window
     {
-        #region Fields
-
+        private Cursor? _laserGlowCursor;
         private IntPtr _windowHandle;
         private AppMode _currentMode = AppMode.Drawing;
-        private bool _isDraggingPanel;
-        private Point _panelDragStartOffset;
-        private DispatcherTimer? _passThroughHitCheckTimer;
-        private bool _isPassThroughActive;
+        private ControlPanelWindow? _controlPanel;
 
-        #endregion
-
-        #region Properties
+        private Color _selectedColor = (Color)ColorConverter.ConvertFromString("#F38BA8");
+        private readonly double _penSize = 3.5;
+        private readonly double _highlighterSize = 16.0;
 
         /// <summary>
-        /// Gets or sets the current interaction state of the overlay (Drawing, Eraser, or PassThrough).
-        /// Automatically updates the UI and underlying OS window styles when changed.
+        /// Gets or sets the active interaction mode for the overlay surface.
         /// </summary>
         public AppMode CurrentMode
         {
@@ -38,29 +36,31 @@ namespace AnnotateIt
             {
                 _currentMode = value;
                 ApplyModeState(_currentMode);
+                _controlPanel?.UpdateActiveButtonStyles();
             }
         }
-
-        #endregion
-
-        #region Constructors
 
         public MainWindow()
         {
             InitializeComponent();
             ConfigurePrimaryScreenBounds();
-            InitializePassThroughTimer();
         }
-
-        #endregion
-
-        #region Lifecycle & Window Setup
 
         protected override void OnSourceInitialized(EventArgs e)
         {
             base.OnSourceInitialized(e);
 
+            _laserGlowCursor = CreateLaserGlowCursor();
+
             _windowHandle = new WindowInteropHelper(this).Handle;
+
+            // Wire auto-cleanup for ephemeral laser pointer strokes
+            OverlayCanvas.StrokeCollected += OverlayCanvas_StrokeCollected;
+
+            // Instantiate and display the independent floating control panel window
+            _controlPanel = new ControlPanelWindow(this);
+            _controlPanel.Show();
+
             ApplyModeState(_currentMode);
         }
 
@@ -72,220 +72,226 @@ namespace AnnotateIt
             Height = SystemParameters.PrimaryScreenHeight;
         }
 
-        private void InitializePassThroughTimer()
+        public void SetColor(Color color)
         {
-            // Lightweight 30ms timer active ONLY during PassThrough mode to detect cursor over panel
-            _passThroughHitCheckTimer = new DispatcherTimer(DispatcherPriority.Input)
+            _selectedColor = color;
+            ApplyModeState(_currentMode);
+        }
+
+        public void ClearStrokes()
+        {
+            OverlayCanvas.Strokes.Clear();
+        }
+
+        /// <summary>
+        /// Renders an intense glowing red halo aura with a crisp center dot into a custom Windows cursor.
+        /// </summary>
+        private Cursor CreateLaserGlowCursor()
+        {
+            int size = 32;
+            var visual = new DrawingVisual();
+            using (var dc = visual.RenderOpen())
             {
-                Interval = TimeSpan.FromMilliseconds(30)
-            };
-            _passThroughHitCheckTimer.Tick += PassThroughHitCheckTimer_Tick;
+                var center = new Point(16, 16);
+
+                // Outer wide vibrant glow aura
+                dc.DrawEllipse(
+                    new SolidColorBrush(Color.FromArgb(90, 255, 30, 30)),
+                    null,
+                    center, 15, 15);
+
+                // Mid-layer intense glow ring
+                dc.DrawEllipse(
+                    new SolidColorBrush(Color.FromArgb(170, 255, 45, 45)),
+                    null,
+                    center, 9, 9);
+
+                // Inner bright bloom
+                dc.DrawEllipse(
+                    new SolidColorBrush(Color.FromArgb(220, 255, 80, 80)),
+                    null,
+                    center, 5.5, 5.5);
+
+                // Crisp solid center core dot
+                dc.DrawEllipse(
+                    new SolidColorBrush(Color.FromRgb(255, 255, 255)),
+                    new Pen(new SolidColorBrush(Color.FromRgb(255, 20, 20)), 1.2),
+                    center, 2.5, 2.5);
+            }
+
+            var rtb = new RenderTargetBitmap(size, size, 96, 96, PixelFormats.Pbgra32);
+            rtb.Render(visual);
+
+            var encoder = new PngBitmapEncoder();
+            encoder.Frames.Add(BitmapFrame.Create(rtb));
+
+            using var pngStream = new MemoryStream();
+            encoder.Save(pngStream);
+            byte[] pngBytes = pngStream.ToArray();
+
+            // Construct standard .cur format memory stream (Hotspot at center 16, 16)
+            using var curStream = new MemoryStream();
+            using var writer = new BinaryWriter(curStream);
+
+            writer.Write((short)0);             // Reserved
+            writer.Write((short)2);             // Type: Cursor (2)
+            writer.Write((short)1);             // Image count
+            writer.Write((byte)size);           // Width
+            writer.Write((byte)size);           // Height
+            writer.Write((byte)0);              // Color count
+            writer.Write((byte)0);              // Reserved
+            writer.Write((short)16);            // Hotspot X
+            writer.Write((short)16);            // Hotspot Y
+            writer.Write((int)pngBytes.Length); // Image data byte size
+            writer.Write((int)22);              // Offset to image data
+
+            writer.Write(pngBytes);
+            writer.Flush();
+            curStream.Position = 0;
+
+            return new Cursor(curStream);
         }
 
         private void ApplyModeState(AppMode mode)
         {
             if (_windowHandle == IntPtr.Zero) return;
 
-            UpdateButtonStyles();
-
-            if (mode == AppMode.PassThrough)
+            bool isPassThrough = (mode == AppMode.PassThrough);
+            NativeMethods.SetClickThrough(_windowHandle, isPassThrough);
+            if (mode == AppMode.LaserPointer && _laserGlowCursor != null)
             {
-                // Start tracking cursor proximity to panel and enable pass-through by default
-                _passThroughHitCheckTimer?.Start();
-                SetPassThroughState(true);
+                OverlayCanvas.UseCustomCursor = true;
+                OverlayCanvas.Cursor = _laserGlowCursor;
             }
             else
             {
-                // Stop pass-through timer and ensure window captures all clicks
-                _passThroughHitCheckTimer?.Stop();
-                SetPassThroughState(false);
+                OverlayCanvas.UseCustomCursor = false;
+                OverlayCanvas.Cursor = Cursors.Arrow;
+            }
+            switch (mode)
+            {
+                case AppMode.Drawing:
+                    OverlayCanvas.EditingMode = InkCanvasEditingMode.Ink;
+                    OverlayCanvas.DefaultDrawingAttributes = new DrawingAttributes
+                    {
+                        Color = _selectedColor,
+                        Width = _penSize,
+                        Height = _penSize,
+                        FitToCurve = true,
+                        IgnorePressure = false,
+                        IsHighlighter = false,
+                        StylusTip = StylusTip.Ellipse
+                    };
+                    break;
+
+                case AppMode.Highlighter:
+                    OverlayCanvas.EditingMode = InkCanvasEditingMode.Ink;
+                    OverlayCanvas.DefaultDrawingAttributes = new DrawingAttributes
+                    {
+                        Color = Color.FromArgb(120, _selectedColor.R, _selectedColor.G, _selectedColor.B),
+                        Width = _highlighterSize,
+                        Height = _highlighterSize * 1.5,
+                        FitToCurve = true,
+                        IgnorePressure = true,
+                        IsHighlighter = true,
+                        StylusTip = StylusTip.Rectangle
+                    };
+                    break;
+
+                case AppMode.LaserPointer:
+                    OverlayCanvas.EditingMode = InkCanvasEditingMode.Ink;
+                    OverlayCanvas.DefaultDrawingAttributes = new DrawingAttributes
+                    {
+                        // Core laser line: bright, thin, solid
+                        Color = Color.FromRgb(255, 60, 60),
+                        Width = 4,
+                        Height = 4,
+                        FitToCurve = true,
+                        IgnorePressure = false,
+                        IsHighlighter = false,
+                        StylusTip = StylusTip.Ellipse
+                    };
+                    break;
+                case AppMode.PointEraser:
+                    OverlayCanvas.EditingMode = InkCanvasEditingMode.EraseByPoint;
+                    OverlayCanvas.EraserShape = new EllipseStylusShape(16, 16);
+                    break;
+
+                case AppMode.StrokeEraser:
+                    OverlayCanvas.EditingMode = InkCanvasEditingMode.EraseByStroke;
+                    break;
+
+                case AppMode.PassThrough:
+                default:
+                    OverlayCanvas.EditingMode = InkCanvasEditingMode.None;
+                    break;
             }
         }
 
-        private void SetPassThroughState(bool enablePassThrough)
+        private async void OverlayCanvas_StrokeCollected(object sender, InkCanvasStrokeCollectedEventArgs e)
         {
-            if (_isPassThroughActive != enablePassThrough)
+            if (_currentMode != AppMode.LaserPointer) return;
+
+            var stroke = e.Stroke;
+
+
+
+            // Gradually decrease stroke alpha
+            for (int i = 0; i < 5; i++)
             {
-                _isPassThroughActive = enablePassThrough;
-                NativeMethods.SetClickThrough(_windowHandle, enablePassThrough);
-            }
-        }
-
-        /// <summary>
-        /// Checks if the mouse cursor is over the Control Panel while in PassThrough mode.
-        /// If over the panel, disables WS_EX_TRANSPARENT so the user can click buttons/drag.
-        /// If outside, re-enables WS_EX_TRANSPARENT so clicks pass to background desktop apps.
-        /// </summary>
-        private void PassThroughHitCheckTimer_Tick(object? sender, EventArgs e)
-        {
-            if (_currentMode != AppMode.PassThrough || _isDraggingPanel) return;
-
-            if (NativeMethods.GetCursorPos(out var pt))
-            {
-                Point wpfScreenPoint = new Point(pt.X, pt.Y);
-                Point windowPoint = PointFromScreen(wpfScreenPoint);
-
-                double panelLeft = Canvas.GetLeft(ControlPanelContainer);
-                double panelTop = Canvas.GetTop(ControlPanelContainer);
-                var panelRect = new Rect(panelLeft, panelTop, ControlPanelContainer.ActualWidth, ControlPanelContainer.ActualHeight);
-
-                bool isOverPanel = panelRect.Contains(windowPoint);
-
-                // If over the panel, do NOT pass through (so user can interact with the panel)
-                SetPassThroughState(!isOverPanel);
-            }
-        }
-
-        #endregion
-
-        #region Control Panel Dragging
-
-        private void PanelHeader_MouseDown(object sender, MouseButtonEventArgs e)
-        {
-            if (e.LeftButton == MouseButtonState.Pressed && sender is IInputElement headerElement)
-            {
-                _isDraggingPanel = true;
-                _panelDragStartOffset = e.GetPosition(ControlPanelContainer);
-                headerElement.CaptureMouse();
-                e.Handled = true;
-            }
-        }
-
-        private void PanelHeader_MouseMove(object sender, MouseEventArgs e)
-        {
-            if (_isDraggingPanel)
-            {
-                Point cursorInCanvas = e.GetPosition(OverlayCanvas);
-
-                double newLeft = cursorInCanvas.X - _panelDragStartOffset.X;
-                double newTop = cursorInCanvas.Y - _panelDragStartOffset.Y;
-
-                newLeft = Math.Clamp(newLeft, 0, OverlayCanvas.ActualWidth - ControlPanelContainer.ActualWidth);
-                newTop = Math.Clamp(newTop, 0, OverlayCanvas.ActualHeight - ControlPanelContainer.ActualHeight);
-
-                Canvas.SetLeft(ControlPanelContainer, newLeft);
-                Canvas.SetTop(ControlPanelContainer, newTop);
-
-                e.Handled = true;
-            }
-        }
-
-        private void PanelHeader_MouseUp(object sender, MouseButtonEventArgs e)
-        {
-            if (_isDraggingPanel)
-            {
-                _isDraggingPanel = false;
-                if (sender is IInputElement headerElement)
+                await Task.Delay(100);
+                byte currentA = stroke.DrawingAttributes.Color.A;
+                if (currentA > 50)
                 {
-                    headerElement.ReleaseMouseCapture();
-                }
-                e.Handled = true;
-            }
-        }
-
-        #endregion
-
-        #region Control Panel Tool Actions
-
-        private void PenButton_Click(object sender, RoutedEventArgs e)
-        {
-            e.Handled = true;
-            CurrentMode = AppMode.Drawing;
-        }
-
-        private void EraserButton_Click(object sender, RoutedEventArgs e)
-        {
-            e.Handled = true;
-            CurrentMode = AppMode.Eraser;
-        }
-
-        private void PassThroughButton_Click(object sender, RoutedEventArgs e)
-        {
-            e.Handled = true;
-            CurrentMode = AppMode.PassThrough;
-        }
-
-        private void ClearButton_Click(object sender, RoutedEventArgs e)
-        {
-            e.Handled = true;
-
-            for (int i = OverlayCanvas.Children.Count - 1; i >= 0; i--)
-            {
-                if (OverlayCanvas.Children[i] != ControlPanelContainer)
-                {
-                    OverlayCanvas.Children.RemoveAt(i);
+                    var c = stroke.DrawingAttributes.Color;
+                    stroke.DrawingAttributes.Color = Color.FromArgb((byte)(currentA - 45), c.R, c.G, c.B);
                 }
             }
+
+            // Remove expired stroke from canvas
+            OverlayCanvas.Strokes.Remove(stroke);
         }
 
-        private void CloseButton_Click(object sender, RoutedEventArgs e)
+        public void ForwardKeyDown(Key key)
         {
-            e.Handled = true;
-            Close();
-        }
-
-        private void UpdateButtonStyles()
-        {
-            var activeBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#89B4FA"));
-            var inactiveBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#313244"));
-            var activeText = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#11111B"));
-            var inactiveText = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#CDD6F4"));
-
-            if (FindName("PenToolButton") is Button penBtn)
-            {
-                penBtn.Background = (_currentMode == AppMode.Drawing) ? activeBrush : inactiveBrush;
-                penBtn.Foreground = (_currentMode == AppMode.Drawing) ? activeText : inactiveText;
-            }
-
-            if (FindName("EraserToolButton") is Button eraserBtn)
-            {
-                eraserBtn.Background = (_currentMode == AppMode.Eraser) ? activeBrush : inactiveBrush;
-                eraserBtn.Foreground = (_currentMode == AppMode.Eraser) ? activeText : inactiveText;
-            }
-
-            if (FindName("PassThroughButton") is Button passBtn)
-            {
-                passBtn.Background = (_currentMode == AppMode.PassThrough) ? activeBrush : inactiveBrush;
-                passBtn.Foreground = (_currentMode == AppMode.PassThrough) ? activeText : inactiveText;
-            }
-        }
-
-        #endregion
-
-        #region Overlay Input Handlers
-
-        private void Overlay_MouseDown(object sender, MouseButtonEventArgs e)
-        {
-            if (e.OriginalSource != OverlayCanvas && e.OriginalSource != this)
-            {
-                return;
-            }
-
-            e.Handled = true;
-        }
-
-        protected override void OnKeyDown(KeyEventArgs e)
-        {
-            base.OnKeyDown(e);
-
-            switch (e.Key)
+            switch (key)
             {
                 case Key.Escape:
                     Close();
                     break;
-                case Key.D:
+                case Key.P:
                     CurrentMode = AppMode.Drawing;
                     break;
-                case Key.E:
-                    CurrentMode = AppMode.Eraser;
+                case Key.H:
+                    CurrentMode = AppMode.Highlighter;
                     break;
-                case Key.P:
+                case Key.L:
+                    CurrentMode = AppMode.LaserPointer;
+                    break;
+                case Key.E:
+                    CurrentMode = AppMode.PointEraser;
+                    break;
+                case Key.S:
+                    CurrentMode = AppMode.StrokeEraser;
+                    break;
                 case Key.Space:
+                case Key.Tab:
                     CurrentMode = AppMode.PassThrough;
                     break;
             }
         }
 
-        #endregion
+        protected override void OnKeyDown(KeyEventArgs e)
+        {
+            base.OnKeyDown(e);
+            ForwardKeyDown(e.Key);
+        }
+
+        protected override void OnClosed(EventArgs e)
+        {
+            base.OnClosed(e);
+            _laserGlowCursor?.Dispose();
+            _controlPanel?.Close();
+        }
     }
 }
