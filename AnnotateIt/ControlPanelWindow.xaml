@@ -1,0 +1,155 @@
+<Window x:Class="AnnotateIt.ControlPanelWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Toolbar"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        Topmost="True"
+        ShowInTaskbar="False"
+        SizeToContent="WidthAndHeight"
+        Left="40" Top="40">
+
+    <Border Background="#181825"
+            BorderBrush="#313244"
+            BorderThickness="1"
+            CornerRadius="10"
+            Padding="6">
+        <Border.Effect>
+            <DropShadowEffect BlurRadius="18"
+                              ShadowDepth="4"
+                              Direction="270"
+                              Color="#000000"
+                              Opacity="0.5"/>
+        </Border.Effect>
+
+        <StackPanel x:Name="ToolbarStackPanel"
+                    Orientation="Horizontal"
+                    VerticalAlignment="Center">
+
+            <!-- Drag Grip Handle -->
+            <Border x:Name="PanelHeader"
+                    Width="22" Height="36"
+                    Background="Transparent"
+                    Cursor="SizeAll"
+                    Margin="0,0,4,0"
+                    MouseDown="PanelHeader_MouseDown">
+                <TextBlock x:Name="DragGripText"
+                           Text="⋮⋮"
+                           Foreground="#6C7086"
+                           FontSize="13"
+                           HorizontalAlignment="Center"
+                           VerticalAlignment="Center"/>
+            </Border>
+
+            <!-- Tool: Pen -->
+            <Button x:Name="PenToolButton"
+                    ToolTip="Pen (P)"
+                    Width="36" Height="36" Margin="2"
+                    Background="#89B4FA" BorderThickness="0" Cursor="Hand"
+                    Click="PenButton_Click">
+                <Path Data="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"
+                      Fill="#11111B" Stretch="Uniform" Width="15" Height="15"/>
+            </Button>
+
+            <!-- Tool: Highlighter -->
+            <Button x:Name="HighlighterButton"
+                    ToolTip="Highlighter (H)"
+                    Width="36" Height="36" Margin="2"
+                    Background="#313244" BorderThickness="0" Cursor="Hand"
+                    Click="HighlighterButton_Click">
+                <Path Data="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z M3 21h18v2H3z"
+                      Fill="#CDD6F4" Stretch="Uniform" Width="15" Height="15"/>
+            </Button>
+
+            <!-- Tool: Laser Pointer -->
+            <Button x:Name="LaserPointerButton"
+                    ToolTip="Laser Pointer (L)"
+                    Width="36" Height="36" Margin="2"
+                    Background="#313244" BorderThickness="0" Cursor="Hand"
+                    Click="LaserPointerButton_Click">
+                <Path Data="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm0-12a4 4 0 1 0 4 4 4 4 0 0 0-4-4z"
+                      Fill="#CDD6F4" Stretch="Uniform" Width="15" Height="15"/>
+            </Button>
+
+            <!-- Tool: Point Eraser -->
+            <Button x:Name="PointEraserButton"
+                    ToolTip="Point Eraser (E)"
+                    Width="36" Height="36" Margin="2"
+                    Background="#313244" BorderThickness="0" Cursor="Hand"
+                    Click="PointEraserButton_Click">
+                <Path Data="M15.14 3c-.51 0-1.02.2-1.41.59L2.59 14.73c-.78.78-.78 2.05 0 2.83L6.44 21.4c.78.78 2.05.78 2.83 0l11.14-11.14c.78-.78.78-2.05 0-2.83l-3.86-3.84c-.39-.39-.9-.59-1.41-.59z"
+                      Fill="#CDD6F4" Stretch="Uniform" Width="15" Height="15"/>
+            </Button>
+
+            <!-- Tool: Stroke Eraser -->
+            <Button x:Name="StrokeEraserButton"
+                    ToolTip="Stroke Eraser (S)"
+                    Width="36" Height="36" Margin="2"
+                    Background="#313244" BorderThickness="0" Cursor="Hand"
+                    Click="StrokeEraserButton_Click">
+                <Path Data="M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z"
+                      Fill="#CDD6F4" Stretch="Uniform" Width="15" Height="15"/>
+            </Button>
+
+            <!-- Divider 1 -->
+            <Rectangle x:Name="Divider1" Width="1" Height="22" Fill="#45475A" Margin="4,2"/>
+
+            <!-- Colors Palette Container -->
+            <StackPanel x:Name="ColorsStackPanel" Orientation="Horizontal" VerticalAlignment="Center">
+                <Button x:Name="ColorPink" ToolTip="Pink" Width="22" Height="22" Margin="3"
+                        Background="#F38BA8" BorderThickness="2" BorderBrush="#FFFFFF" Cursor="Hand"
+                        Click="ColorButton_Click" Tag="#F38BA8"/>
+                <Button x:Name="ColorYellow" ToolTip="Yellow" Width="22" Height="22" Margin="3"
+                        Background="#F9E2AF" BorderThickness="0" BorderBrush="#FFFFFF" Cursor="Hand"
+                        Click="ColorButton_Click" Tag="#F9E2AF"/>
+                <Button x:Name="ColorGreen" ToolTip="Green" Width="22" Height="22" Margin="3"
+                        Background="#A6E3A1" BorderThickness="0" BorderBrush="#FFFFFF" Cursor="Hand"
+                        Click="ColorButton_Click" Tag="#A6E3A1"/>
+                <Button x:Name="ColorBlue" ToolTip="Cyan / Blue" Width="22" Height="22" Margin="3"
+                        Background="#89DCEB" BorderThickness="0" BorderBrush="#FFFFFF" Cursor="Hand"
+                        Click="ColorButton_Click" Tag="#89DCEB"/>
+            </StackPanel>
+
+            <!-- Divider 2 -->
+            <Rectangle x:Name="Divider2" Width="1" Height="22" Fill="#45475A" Margin="4,2"/>
+
+            <!-- Tool: Pass-Through -->
+            <Button x:Name="PassThroughButton"
+                    ToolTip="Pass-through (Space/Tab)"
+                    Width="36" Height="36" Margin="2"
+                    Background="#313244" BorderThickness="0" Cursor="Hand"
+                    Click="PassThroughButton_Click">
+                <Path Data="M7 2l12 11.5-5.5 1 3.5 7-3 1.5-3.5-7-3.5 4.5z"
+                      Fill="#CDD6F4" Stretch="Uniform" Width="15" Height="15"/>
+            </Button>
+
+            <!-- Orientation Toggle -->
+            <Button ToolTip="Toggle Orientation (O)"
+                    Width="36" Height="36" Margin="2"
+                    Background="#313244" BorderThickness="0" Cursor="Hand"
+                    Click="OrientationToggleButton_Click">
+                <Path Data="M16 17.01V10h-2v7.01h-3L15 21l4-3.99h-3zM9 3L5 6.99h3V14h2V6.99h3L9 3z"
+                      Fill="#CDD6F4" Stretch="Uniform" Width="15" Height="15"/>
+            </Button>
+
+            <!-- Clear Canvas -->
+            <Button ToolTip="Clear Canvas"
+                    Width="36" Height="36" Margin="2"
+                    Background="#313244" BorderThickness="0" Cursor="Hand"
+                    Click="ClearButton_Click">
+                <Path Data="M12 4V1L8 5l4 4V6c3.31 0 6 2.69 6 6 0 1.01-.25 1.97-.7 2.8l1.46 1.46A7.93 7.93 0 0 0 20 12c0-4.42-3.58-8-8-8zm0 14c-3.31 0-6-2.69-6-6 0-1.01.25-1.97.7-2.8L5.24 7.74A7.93 7.93 0 0 0 4 12c0 4.42 3.58 8 8 8v3l4-4-4-4v3z"
+                      Fill="#CDD6F4" Stretch="Uniform" Width="15" Height="15"/>
+            </Button>
+
+            <!-- Exit App -->
+            <Button ToolTip="Exit (Esc)"
+                    Width="36" Height="36" Margin="2"
+                    Background="#313244" BorderThickness="0" Cursor="Hand"
+                    Click="CloseButton_Click">
+                <Path Data="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"
+                      Fill="#F38BA8" Stretch="Uniform" Width="14" Height="14"/>
+            </Button>
+        </StackPanel>
+    </Border>
+</Window>

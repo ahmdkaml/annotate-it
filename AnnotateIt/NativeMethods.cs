@@ -18,20 +18,11 @@ namespace AnnotateIt
         [DllImport("user32.dll", SetLastError = true)]
         public static extern int SetWindowLong(IntPtr hWnd, int nIndex, int dwNewLong);
 
-        [DllImport("user32.dll")]
-        [return: MarshalAs(UnmanagedType.Bool)]
-        public static extern bool GetCursorPos(out POINT lpPoint);
-
-        [StructLayout(LayoutKind.Sequential)]
-        public struct POINT
-        {
-            public int X;
-            public int Y;
-        }
-
         /// <summary>
         /// Enables or disables OS-level mouse click-through for the specified window handle.
         /// </summary>
+        /// <param name="hWnd">The target window handle.</param>
+        /// <param name="enablePassThrough">True to let clicks pass through; false to capture clicks.</param>
         public static void SetClickThrough(IntPtr hWnd, bool enablePassThrough)
         {
             if (hWnd == IntPtr.Zero) return;

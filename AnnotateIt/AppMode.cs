@@ -11,13 +11,28 @@ namespace AnnotateIt
         PassThrough,
 
         /// <summary>
-        /// Annotation mode: Pointer clicks and strokes are captured by the overlay canvas.
+        /// Solid ink drawing mode.
         /// </summary>
         Drawing,
 
         /// <summary>
-        /// Erasing mode: Pointer clicks interact with overlay annotations to delete them.
+        /// Semi-transparent highlighter drawing mode.
         /// </summary>
-        Eraser
+        Highlighter,
+
+        /// <summary>
+        /// Laser pointer mode: Ephemeral ink stroke that automatically fades out after a delay.
+        /// </summary>
+        LaserPointer,
+
+        /// <summary>
+        /// Point eraser mode: Erases individual segments of strokes touched by the cursor.
+        /// </summary>
+        PointEraser,
+
+        /// <summary>
+        /// Stroke eraser mode: Erases entire stroke paths touched by the cursor.
+        /// </summary>
+        StrokeEraser
     }
 }
