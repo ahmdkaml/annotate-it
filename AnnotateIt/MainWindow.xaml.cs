@@ -2,8 +2,9 @@
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Shapes;
+using System.Windows.Threading;
 
 namespace AnnotateIt
 {
@@ -15,153 +16,274 @@ namespace AnnotateIt
     {
         #region Fields
 
-        /// <summary>
-        /// Tracks the cumulative number of captured pointer clicks for development verification.
-        /// </summary>
-        private int _clickCount;
+        private IntPtr _windowHandle;
+        private AppMode _currentMode = AppMode.Drawing;
+        private bool _isDraggingPanel;
+        private Point _panelDragStartOffset;
+        private DispatcherTimer? _passThroughHitCheckTimer;
+        private bool _isPassThroughActive;
 
         #endregion
 
         #region Properties
 
         /// <summary>
-        /// Gets the total number of mouse clicks intercepted by the overlay surface during the current session.
+        /// Gets or sets the current interaction state of the overlay (Drawing, Eraser, or PassThrough).
+        /// Automatically updates the UI and underlying OS window styles when changed.
         /// </summary>
-        public int TotalCapturedClicks => _clickCount;
-
-        /// <summary>
-        /// Gets or sets the diameter (in device-independent pixels) of the visual feedback marker drawn on click.
-        /// </summary>
-        public double FeedbackMarkerDiameter { get; set; } = 14.0;
-
-        /// <summary>
-        /// Gets or sets the primary fill brush used for the click verification marker.
-        /// </summary>
-        public Brush FeedbackMarkerFill { get; set; } = Brushes.DeepSkyBlue;
-
-        /// <summary>
-        /// Gets or sets the outline brush used for the click verification marker.
-        /// </summary>
-        public Brush FeedbackMarkerStroke { get; set; } = Brushes.White;
+        public AppMode CurrentMode
+        {
+            get => _currentMode;
+            set
+            {
+                _currentMode = value;
+                ApplyModeState(_currentMode);
+            }
+        }
 
         #endregion
 
         #region Constructors
 
-        /// <summary>
-        /// Initializes a new instance of the <see cref="MainWindow"/> class.
-        /// Configures initial visual bounds and sets up development telemetry.
-        /// </summary>
         public MainWindow()
         {
             InitializeComponent();
             ConfigurePrimaryScreenBounds();
-            UpdateDebugHud("Overlay Active — Click anywhere (Press Esc to close)");
+            InitializePassThroughTimer();
         }
 
         #endregion
 
-        #region Window Setup & Layout
+        #region Lifecycle & Window Setup
 
-        /// <summary>
-        /// Sets window dimensions and positions to strictly cover the primary display area
-        /// using WPF device-independent units to respect system DPI scaling.
-        /// </summary>
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+
+            _windowHandle = new WindowInteropHelper(this).Handle;
+            ApplyModeState(_currentMode);
+        }
+
         private void ConfigurePrimaryScreenBounds()
         {
-            // Position at the primary screen origin
             Left = 0;
             Top = 0;
-
-            // Constrain directly to primary display dimensions
             Width = SystemParameters.PrimaryScreenWidth;
             Height = SystemParameters.PrimaryScreenHeight;
         }
 
-        #endregion
-
-        #region Input Handlers
-
-        /// <summary>
-        /// Handles the <see cref="UIElement.MouseDown"/> event for the root overlay window.
-        /// Consumes pointer input, prevents it from propagating to desktop applications underneath,
-        /// and triggers diagnostic visual feedback.
-        /// </summary>
-        /// <param name="sender">The source of the mouse event.</param>
-        /// <param name="e">The mouse button event arguments containing click coordinates and state.</param>
-        private void Overlay_MouseDown(object sender, MouseButtonEventArgs e)
+        private void InitializePassThroughTimer()
         {
-            // Mark the event as handled immediately to prevent OS/WPF input bubbling
-            e.Handled = true;
+            // Lightweight 30ms timer active ONLY during PassThrough mode to detect cursor over panel
+            _passThroughHitCheckTimer = new DispatcherTimer(DispatcherPriority.Input)
+            {
+                Interval = TimeSpan.FromMilliseconds(30)
+            };
+            _passThroughHitCheckTimer.Tick += PassThroughHitCheckTimer_Tick;
+        }
 
-            // Extract the position relative to this window's coordinate space
-            Point clickPosition = e.GetPosition(this);
-            _clickCount++;
+        private void ApplyModeState(AppMode mode)
+        {
+            if (_windowHandle == IntPtr.Zero) return;
 
-            // Update verification telemetry
-            UpdateDebugHud($"Click #{_clickCount} intercepted at ({clickPosition.X:F0}, {clickPosition.Y:F0})");
+            UpdateButtonStyles();
 
-            // Render diagnostic point marker
-            DrawClickFeedback(clickPosition);
+            if (mode == AppMode.PassThrough)
+            {
+                // Start tracking cursor proximity to panel and enable pass-through by default
+                _passThroughHitCheckTimer?.Start();
+                SetPassThroughState(true);
+            }
+            else
+            {
+                // Stop pass-through timer and ensure window captures all clicks
+                _passThroughHitCheckTimer?.Stop();
+                SetPassThroughState(false);
+            }
+        }
+
+        private void SetPassThroughState(bool enablePassThrough)
+        {
+            if (_isPassThroughActive != enablePassThrough)
+            {
+                _isPassThroughActive = enablePassThrough;
+                NativeMethods.SetClickThrough(_windowHandle, enablePassThrough);
+            }
         }
 
         /// <summary>
-        /// Handles keyboard input to provide a development exit mechanism.
+        /// Checks if the mouse cursor is over the Control Panel while in PassThrough mode.
+        /// If over the panel, disables WS_EX_TRANSPARENT so the user can click buttons/drag.
+        /// If outside, re-enables WS_EX_TRANSPARENT so clicks pass to background desktop apps.
         /// </summary>
-        /// <param name="e">The key event arguments.</param>
+        private void PassThroughHitCheckTimer_Tick(object? sender, EventArgs e)
+        {
+            if (_currentMode != AppMode.PassThrough || _isDraggingPanel) return;
+
+            if (NativeMethods.GetCursorPos(out var pt))
+            {
+                Point wpfScreenPoint = new Point(pt.X, pt.Y);
+                Point windowPoint = PointFromScreen(wpfScreenPoint);
+
+                double panelLeft = Canvas.GetLeft(ControlPanelContainer);
+                double panelTop = Canvas.GetTop(ControlPanelContainer);
+                var panelRect = new Rect(panelLeft, panelTop, ControlPanelContainer.ActualWidth, ControlPanelContainer.ActualHeight);
+
+                bool isOverPanel = panelRect.Contains(windowPoint);
+
+                // If over the panel, do NOT pass through (so user can interact with the panel)
+                SetPassThroughState(!isOverPanel);
+            }
+        }
+
+        #endregion
+
+        #region Control Panel Dragging
+
+        private void PanelHeader_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.LeftButton == MouseButtonState.Pressed && sender is IInputElement headerElement)
+            {
+                _isDraggingPanel = true;
+                _panelDragStartOffset = e.GetPosition(ControlPanelContainer);
+                headerElement.CaptureMouse();
+                e.Handled = true;
+            }
+        }
+
+        private void PanelHeader_MouseMove(object sender, MouseEventArgs e)
+        {
+            if (_isDraggingPanel)
+            {
+                Point cursorInCanvas = e.GetPosition(OverlayCanvas);
+
+                double newLeft = cursorInCanvas.X - _panelDragStartOffset.X;
+                double newTop = cursorInCanvas.Y - _panelDragStartOffset.Y;
+
+                newLeft = Math.Clamp(newLeft, 0, OverlayCanvas.ActualWidth - ControlPanelContainer.ActualWidth);
+                newTop = Math.Clamp(newTop, 0, OverlayCanvas.ActualHeight - ControlPanelContainer.ActualHeight);
+
+                Canvas.SetLeft(ControlPanelContainer, newLeft);
+                Canvas.SetTop(ControlPanelContainer, newTop);
+
+                e.Handled = true;
+            }
+        }
+
+        private void PanelHeader_MouseUp(object sender, MouseButtonEventArgs e)
+        {
+            if (_isDraggingPanel)
+            {
+                _isDraggingPanel = false;
+                if (sender is IInputElement headerElement)
+                {
+                    headerElement.ReleaseMouseCapture();
+                }
+                e.Handled = true;
+            }
+        }
+
+        #endregion
+
+        #region Control Panel Tool Actions
+
+        private void PenButton_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            CurrentMode = AppMode.Drawing;
+        }
+
+        private void EraserButton_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            CurrentMode = AppMode.Eraser;
+        }
+
+        private void PassThroughButton_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            CurrentMode = AppMode.PassThrough;
+        }
+
+        private void ClearButton_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+
+            for (int i = OverlayCanvas.Children.Count - 1; i >= 0; i--)
+            {
+                if (OverlayCanvas.Children[i] != ControlPanelContainer)
+                {
+                    OverlayCanvas.Children.RemoveAt(i);
+                }
+            }
+        }
+
+        private void CloseButton_Click(object sender, RoutedEventArgs e)
+        {
+            e.Handled = true;
+            Close();
+        }
+
+        private void UpdateButtonStyles()
+        {
+            var activeBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#89B4FA"));
+            var inactiveBrush = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#313244"));
+            var activeText = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#11111B"));
+            var inactiveText = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#CDD6F4"));
+
+            if (FindName("PenToolButton") is Button penBtn)
+            {
+                penBtn.Background = (_currentMode == AppMode.Drawing) ? activeBrush : inactiveBrush;
+                penBtn.Foreground = (_currentMode == AppMode.Drawing) ? activeText : inactiveText;
+            }
+
+            if (FindName("EraserToolButton") is Button eraserBtn)
+            {
+                eraserBtn.Background = (_currentMode == AppMode.Eraser) ? activeBrush : inactiveBrush;
+                eraserBtn.Foreground = (_currentMode == AppMode.Eraser) ? activeText : inactiveText;
+            }
+
+            if (FindName("PassThroughButton") is Button passBtn)
+            {
+                passBtn.Background = (_currentMode == AppMode.PassThrough) ? activeBrush : inactiveBrush;
+                passBtn.Foreground = (_currentMode == AppMode.PassThrough) ? activeText : inactiveText;
+            }
+        }
+
+        #endregion
+
+        #region Overlay Input Handlers
+
+        private void Overlay_MouseDown(object sender, MouseButtonEventArgs e)
+        {
+            if (e.OriginalSource != OverlayCanvas && e.OriginalSource != this)
+            {
+                return;
+            }
+
+            e.Handled = true;
+        }
+
         protected override void OnKeyDown(KeyEventArgs e)
         {
             base.OnKeyDown(e);
 
-            // Development escape hatch: exit overlay when Escape is pressed
-            if (e.Key == Key.Escape)
+            switch (e.Key)
             {
-                Close();
+                case Key.Escape:
+                    Close();
+                    break;
+                case Key.D:
+                    CurrentMode = AppMode.Drawing;
+                    break;
+                case Key.E:
+                    CurrentMode = AppMode.Eraser;
+                    break;
+                case Key.P:
+                case Key.Space:
+                    CurrentMode = AppMode.PassThrough;
+                    break;
             }
-        }
-
-        #endregion
-
-        #region Feedback & Visualization
-
-        /// <summary>
-        /// Updates the development HUD text block with diagnostic feedback.
-        /// </summary>
-        /// <param name="message">The status or telemetry message to display.</param>
-        private void UpdateDebugHud(string message)
-        {
-            if (DebugText != null)
-            {
-                DebugText.Text = message;
-            }
-        }
-
-        /// <summary>
-        /// Creates and adds an <see cref="Ellipse"/> marker to the canvas at the specified coordinate
-        /// to visually verify that click positions are mapped accurately.
-        /// </summary>
-        /// <param name="position">The (X, Y) coordinates where the mouse click occurred.</param>
-        private void DrawClickFeedback(Point position)
-        {
-            double radius = FeedbackMarkerDiameter / 2.0;
-
-            var marker = new Ellipse
-            {
-                Width = FeedbackMarkerDiameter,
-                Height = FeedbackMarkerDiameter,
-                Fill = FeedbackMarkerFill,
-                Stroke = FeedbackMarkerStroke,
-                StrokeThickness = 2,
-
-                // CRITICAL: Prevent the marker itself from intercepting subsequent mouse clicks
-                IsHitTestVisible = false
-            };
-
-            // Offset the element so its center aligns exactly with the mouse tip
-            Canvas.SetLeft(marker, position.X - radius);
-            Canvas.SetTop(marker, position.Y - radius);
-
-            OverlayCanvas.Children.Add(marker);
         }
 
         #endregion
